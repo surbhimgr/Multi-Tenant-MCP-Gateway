@@ -1,8 +1,12 @@
+// valid request: curl -X POST http://localhost:8080/my_mcp_gateway -H "Content-Type: application/json" -d '{"Input_tenant_id":"123","Input_tool":"getTime"}'
 package main
 // import "fmt"
 import (
 	"github.com/gin-gonic/gin"
 	"net/http"
+	"time"
+	"errors"
+	"sync"
 )
 
 type Input struct {
@@ -52,6 +56,45 @@ func getToolResult(tool string) string{
 	return tools[tool]
 }
 
+var rateLimitStore = make(map[string][]int64)
+var rateLimitMu sync.Mutex
+var windowSize = 60 // 60 seconds
+var maxRequests = 5
+
+// - A mutex (mutual exclusion lock) is a synchronization primitive in Go (sync.Mutex).
+// - It ensures that only one goroutine at a time can execute the code between Lock() and Unlock().
+// - If multiple goroutines try to access the same shared resource (like your rateLimitStore map), the mutex prevents race conditions.
+
+func isRateLimited(tenant_id string) error {
+	rateLimitMu.Lock()
+	defer rateLimitMu.Unlock()
+
+	currentTime := time.Now().UnixNano()
+	// windowSize is in seconds, convert to nanoseconds to match UnixNano(), nanoseconds are used for higher precision in time calculations, so that multiple requests within the same second can be accurately tracked and rate-limited.
+	window := int64(windowSize) * int64(time.Second)
+
+	requests := rateLimitStore[tenant_id]
+	// Keep only requests inside the window
+	var validRequests []int64
+	for _, ts := range requests {
+		if currentTime-ts <= window {
+			validRequests = append(validRequests, ts)
+		}
+	}
+
+	// Check if rate limit is exceeded
+	if len(validRequests) >= maxRequests {
+		// persist the trimmed slice
+		rateLimitStore[tenant_id] = validRequests
+		return errors.New("Rate limit exceeded")
+	}
+
+	// record current request and persist
+	validRequests = append(validRequests, currentTime)
+	rateLimitStore[tenant_id] = validRequests
+	return nil
+}
+
 func main() {
 	myrouter := gin.Default()
 	myrouter.POST("/my_mcp_gateway", func(response_context *gin.Context){
@@ -63,6 +106,10 @@ func main() {
 		tenant := getTenant(input.Input_tenant_id)
 		if tenant == nil {
 			response_context.JSON(http.StatusBadRequest, gin.H{"error": "Invalid Tenant ID"})
+			return
+		}
+		if err := isRateLimited(tenant.Tenant_id); err != nil {
+			response_context.JSON(http.StatusTooManyRequests, gin.H{"error": err.Error()})
 			return
 		}
 		if !validateTools(tenant.Allowed_tools, input.Input_tool){
