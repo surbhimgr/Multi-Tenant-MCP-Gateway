@@ -41,6 +41,16 @@ func validateTools(Allowed_tools []string, tool string) bool {
 	}
 	return false
 }
+var tools = map[string]string{
+"getTime":"11:20pm",
+"getWeather":"sunny",
+"getCar":"mercedes benz",
+"getLocation":"Japan" ,
+}
+
+func getToolResult(tool string) string{
+	return tools[tool]
+}
 
 func main() {
 	myrouter := gin.Default()
@@ -59,10 +69,11 @@ func main() {
 			response_context.JSON(http.StatusBadRequest, gin.H{"error": "Tool not found"})
 			return
 		}
+		tool_res := getToolResult(input.Input_tool)
 		response_context.JSON(http.StatusOK, gin.H{
 			"tenant id":tenant.Tenant_id,
 			"tool requested":input.Input_tool,
-			"message": "tool is allowed for given tenant",
+			"result": tool_res,
 		})
 	})
 	myrouter.Run(":8080")
